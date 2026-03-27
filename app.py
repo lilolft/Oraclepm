@@ -19,8 +19,14 @@ CLOB_API = "https://clob.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
 WINDY_API_URL = "https://api.windy.com/api/point-forecast/v2"
 
-PRIMARY_MODELS = ["gfs", "ecmwf", "icon", "meteoblue"]
-SECONDARY_MODELS = ["iconEu", "namConus", "namAlaska", "namHawaii", "hrrr", "arome", "ukv", "cams"]
+SUPPORTED_MODELS = ["arome", "iconEu", "gfs", "gfsWave", "namConus", "namHawaii", "namAlaska", "cams"]
+PRIMARY_DISPLAY = [
+    ("GFS", "gfs"),
+    ("ECMWF", None),
+    ("ICON", "iconEu"),
+    ("METEOBLUE", None),
+]
+SECONDARY_MODELS = [m for m in SUPPORTED_MODELS if m not in {"gfs", "iconEu"}]
 
 AIRPORT_LIST = [
     ("Wellington", "NZWN"),
@@ -245,6 +251,18 @@ def windy_point_forecast(lat: float, lon: float, model: str, key: str):
     if not resp.ok:
         return {"error": resp.text}
     return resp.json()
+
+
+def test_models(lat: float, lon: float, key: str, models: list[str]) -> dict[str, bool]:
+    results = {}
+    for model in models:
+        try:
+            data = windy_point_forecast(lat, lon, model, key)
+            ok = isinstance(data, dict) and ("ts" in data) and ("temp-surface" in data or "temp" in data)
+            results[model] = ok
+        except Exception:
+            results[model] = False
+    return results
 
 
 def peak_temp_for_date(data, target_date: date, tz_str: str | None) -> float | None:
@@ -504,6 +522,9 @@ I18N = {
         "weather_models": "Модели для запроса",
         "weather_key_missing": "Нужен WINDY_API_KEY в Streamlit Secrets.",
         "weather_other": "Другие модели",
+        "weather_test": "Проверить модели",
+        "weather_supported": "Доступные модели",
+        "weather_unavailable": "Недоступные модели",
     },
     "en": {
         "title": "Polymarket bet calculator",
@@ -563,6 +584,9 @@ I18N = {
         "weather_models": "Models to query",
         "weather_key_missing": "WINDY_API_KEY is missing in Streamlit Secrets.",
         "weather_other": "Other models",
+        "weather_test": "Test models",
+        "weather_supported": "Available models",
+        "weather_unavailable": "Unavailable models",
     },
 }
 
@@ -652,11 +676,24 @@ if event and markets:
         st.warning(t["weather_key_missing"])
     else:
         locations = resolve_locations()
+        if "model_test" not in st.session_state:
+            st.session_state["model_test"] = {}
+
         query_models = st.multiselect(
             t["weather_models"],
-            PRIMARY_MODELS + SECONDARY_MODELS,
-            default=["gfs"],
+            SUPPORTED_MODELS,
+            default=SUPPORTED_MODELS,
         )
+
+        if st.button(t["weather_test"]):
+            sample = locations[0]
+            st.session_state["model_test"] = test_models(sample["lat"], sample["lon"], windy_key, SUPPORTED_MODELS)
+
+        if st.session_state["model_test"]:
+            available = [m for m, ok in st.session_state["model_test"].items() if ok]
+            unavailable = [m for m, ok in st.session_state["model_test"].items() if not ok]
+            st.caption(f"{t['weather_supported']}: {', '.join(available) if available else '—'}")
+            st.caption(f"{t['weather_unavailable']}: {', '.join(unavailable) if unavailable else '—'}")
 
         if "weather_cache" not in st.session_state:
             st.session_state["weather_cache"] = {}
@@ -667,16 +704,19 @@ if event and markets:
                 row = {
                     "Location": f"{loc['name']} ({loc['code']})",
                 }
-                for model in PRIMARY_MODELS:
+                for label, model in PRIMARY_DISPLAY:
+                    if model is None:
+                        row[label] = "н/д"
+                        continue
                     if model not in query_models:
-                        row[model.upper()] = "—"
+                        row[label] = "—"
                         continue
                     data = windy_point_forecast(loc["lat"], loc["lon"], model, windy_key)
                     if isinstance(data, dict) and data.get("error"):
-                        row[model.upper()] = "н/д"
+                        row[label] = "н/д"
                         continue
                     temp = peak_temp_for_date(data, target_date, loc.get("tz"))
-                    row[model.upper()] = f"{temp:.1f}°C" if temp is not None else "н/д"
+                    row[label] = f"{temp:.1f}°C" if temp is not None else "н/д"
                 results.append(row)
 
             st.session_state["weather_cache"]["primary"] = results
