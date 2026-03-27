@@ -104,6 +104,51 @@ def image_link_html(path: Path, url: str, height_px: int = 48) -> str:
     )
 
 
+def _sorted_book(book_side, reverse=False):
+    return sorted(
+        book_side or [],
+        key=lambda x: float(x.get("price")) if x.get("price") is not None else 0.0,
+        reverse=reverse,
+    )
+
+
+def suggest_price_from_book(book, mode: str) -> float | None:
+    asks_sorted = _sorted_book(book.get("asks"), reverse=False)
+    bids_sorted = _sorted_book(book.get("bids"), reverse=True)
+    if not asks_sorted:
+        return None
+
+    best_ask = float(asks_sorted[0]["price"])
+    best_bid = float(bids_sorted[0]["price"]) if bids_sorted else max(best_ask - 0.01, 0.01)
+    spread = max(best_ask - best_bid, 0.0)
+
+    # Base aggressiveness mapped to target fill chance (heuristic).
+    # Lower alpha => closer to best ask (higher fill chance).
+    base_alpha = {"safe": 0.25, "normal": 0.50, "risk": 0.65}.get(mode, 0.50)
+
+    # Orderbook imbalance adjustment (more bids => slightly lower price ok).
+    bid_depth = sum(float(x.get("size", 0)) for x in bids_sorted[:5]) if bids_sorted else 0.0
+    ask_depth = sum(float(x.get("size", 0)) for x in asks_sorted[:5]) if asks_sorted else 0.0
+    imbalance = 0.0
+    if bid_depth + ask_depth > 0:
+        imbalance = (bid_depth - ask_depth) / (bid_depth + ask_depth)
+    adj = 0.10 * (-imbalance)  # more asks => be more aggressive (closer to ask)
+    alpha = min(max(base_alpha + adj, 0.0), 1.0)
+
+    price = best_ask - spread * alpha
+
+    # Snap into book levels if available.
+    if asks_sorted:
+        # Find nearest ask price >= computed price (more likely to fill).
+        for a in asks_sorted:
+            p = float(a.get("price"))
+            if p >= price:
+                price = p
+                break
+
+    return max(min(price, 0.999), 0.001)
+
+
 LANGS = {
     "Русский": "ru",
     "English": "en",
@@ -151,6 +196,11 @@ I18N = {
         "price_cents": "Цена (¢)",
         "size_label": "Размер",
         "token_expander": "Token ID",
+        "mode_title": "Автоподбор цен",
+        "mode_safe": "Safe 75%",
+        "mode_normal": "Normal 50%",
+        "mode_risk": "Risk 35%",
+        "mode_hint": "Режим подбирает цены по спреду и объёмам (эвристика).",
     },
     "en": {
         "title": "Polymarket bet calculator",
@@ -193,6 +243,11 @@ I18N = {
         "price_cents": "Price (¢)",
         "size_label": "Size",
         "token_expander": "Token ID",
+        "mode_title": "Auto price mode",
+        "mode_safe": "Safe 75%",
+        "mode_normal": "Normal 50%",
+        "mode_risk": "Risk 35%",
+        "mode_hint": "Mode suggests prices using spread and depth (heuristic).",
     },
 }
 
@@ -285,15 +340,8 @@ if event and markets:
                     asks = book.get("asks") or []
                     bids = book.get("bids") or []
 
-                    asks_sorted = sorted(
-                        asks,
-                        key=lambda x: float(x.get("price")) if x.get("price") is not None else 0.0,
-                    )
-                    bids_sorted = sorted(
-                        bids,
-                        key=lambda x: float(x.get("price")) if x.get("price") is not None else 0.0,
-                        reverse=True,
-                    )
+                    asks_sorted = _sorted_book(asks, reverse=False)
+                    bids_sorted = _sorted_book(bids, reverse=True)
 
                     best_bid = bids_sorted[0]["price"] if bids_sorted else None
                     best_ask = asks_sorted[0]["price"] if asks_sorted else None
@@ -336,6 +384,34 @@ if event and markets:
                         st.code(m["token_id"])
 
         st.subheader(t["set_prices"])
+        st.markdown(f"**{t['mode_title']}**")
+        st.caption(t["mode_hint"])
+        mode_cols = st.columns(3)
+        if mode_cols[0].button(t["mode_safe"]):
+            for m in selected:
+                book = orderbooks.get(m["token_id"], {})
+                price = suggest_price_from_book(book, "safe")
+                if price is None:
+                    continue
+                st.session_state[f"price_{m['token_id']}"] = round(price * 100, 2)
+            st.rerun()
+        if mode_cols[1].button(t["mode_normal"]):
+            for m in selected:
+                book = orderbooks.get(m["token_id"], {})
+                price = suggest_price_from_book(book, "normal")
+                if price is None:
+                    continue
+                st.session_state[f"price_{m['token_id']}"] = round(price * 100, 2)
+            st.rerun()
+        if mode_cols[2].button(t["mode_risk"]):
+            for m in selected:
+                book = orderbooks.get(m["token_id"], {})
+                price = suggest_price_from_book(book, "risk")
+                if price is None:
+                    continue
+                st.session_state[f"price_{m['token_id']}"] = round(price * 100, 2)
+            st.rerun()
+
         price_inputs = []
         for m in selected:
             book = orderbooks.get(m["token_id"], {})
@@ -344,6 +420,9 @@ if event and markets:
                 default_price = float((book.get("asks") or [{}])[0].get("price")) * 100
             except (TypeError, ValueError):
                 default_price = 50.0
+            state_key = f"price_{m['token_id']}"
+            if state_key in st.session_state:
+                default_price = float(st.session_state[state_key])
             if default_price < 1.0:
                 default_price = 1.0
             if default_price > 99.9:
@@ -354,7 +433,7 @@ if event and markets:
                 max_value=99.9,
                 value=default_price,
                 step=0.1,
-                key=f"price_{m['token_id']}",
+                key=state_key,
             )
             price_inputs.append((m, float(price_cents) / 100.0))
 
