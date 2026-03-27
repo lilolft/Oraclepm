@@ -1,2 +1,4 @@
 requests>=2.31.0
 streamlit>=1.32.0
+timezonefinder>=6.5.0
+airportsdata>=20241021

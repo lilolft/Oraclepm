@@ -1,5 +1,8 @@
 ﻿import base64
 import json
+import re
+from datetime import datetime, date, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -8,10 +11,54 @@ import time
 
 import requests
 import streamlit as st
+from timezonefinder import TimezoneFinder
+import airportsdata
 
 GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_API = "https://clob.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
+WINDY_API_URL = "https://api.windy.com/api/point-forecast/v2"
+
+PRIMARY_MODELS = ["gfs", "ecmwf", "icon", "meteoblue"]
+SECONDARY_MODELS = ["iconEu", "namConus", "namAlaska", "namHawaii", "hrrr", "arome", "ukv", "cams"]
+
+AIRPORT_LIST = [
+    ("Wellington", "NZWN"),
+    ("Shenzhen", "ZGSZ"),
+    ("Atlanta", "KATL"),
+    ("Buenos Aires", "SAEZ"),
+    ("Seoul", "RKSI"),
+    ("Shanghai", "ZSPD"),
+    ("Singapore", "WSSS"),
+    ("London", "EGLC"),
+    ("Seattle", "KSEA"),
+    ("Chengdu", "ZUUU"),
+    ("Tokyo", "RJTT"),
+    ("Beijing", "ZBAA"),
+    ("Los Angeles", "KLAX"),
+    ("Wuhan", "ZHHH"),
+    ("Chicago", "KORD"),
+    ("Paris", "LFPG"),
+    ("Miami", "KMIA"),
+    ("Dallas", "KDAL"),
+    ("Sao Paulo", "SBGR"),
+    ("NYC", "KLGA"),
+    ("Hong Kong Observatory", None),
+    ("Ankara", "LTAC"),
+    ("Madrid", "LEMD"),
+    ("Houston", "KHOU"),
+    ("Munich", "EDDM"),
+    ("Toronto", "CYYZ"),
+    ("Chongqing", "ZUCK"),
+    ("Lucknow", "VILK"),
+    ("Denver", "KBKF"),
+    ("Austin", "KAUS"),
+    ("San Francisco", "KSFO"),
+    ("Warsaw", "EPWA"),
+    ("Taipei", "RCTP"),
+    ("Tel Aviv", "LLBG"),
+    ("Milan", "LIMC"),
+]
 
 
 def _parse_json_list(value):
@@ -106,8 +153,137 @@ def fetch_trades(condition_id: str, limit: int = 200):
         return []
 
 
+@st.cache_data(show_spinner=False)
+def load_airports():
+    return airportsdata.load("icao")
+
+
+def resolve_locations():
+    airports = load_airports()
+    locations = []
+    for name, code in AIRPORT_LIST:
+        if code and code in airports:
+            info = airports[code]
+            tz = TZF.timezone_at(lng=info.get("lon"), lat=info.get("lat"))
+            locations.append(
+                {
+                    "name": name,
+                    "code": code,
+                    "lat": info.get("lat"),
+                    "lon": info.get("lon"),
+                    "tz": tz,
+                }
+            )
+        elif name == "Hong Kong Observatory":
+            tz = TZF.timezone_at(lng=114.174, lat=22.301)
+            locations.append(
+                {
+                    "name": name,
+                    "code": "HKO",
+                    "lat": 22.301,
+                    "lon": 114.174,
+                    "tz": tz,
+                }
+            )
+    return locations
+
+
+def parse_event_date(title: str) -> date | None:
+    if not title:
+        return None
+    months = {
+        "january": 1,
+        "february": 2,
+        "march": 3,
+        "april": 4,
+        "may": 5,
+        "june": 6,
+        "july": 7,
+        "august": 8,
+        "september": 9,
+        "october": 10,
+        "november": 11,
+        "december": 12,
+    }
+    match = re.search(
+        r"(january|february|march|april|may|june|july|august|september|october|november|december)\\s+(\\d{1,2})",
+        title,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    month = months[match.group(1).lower()]
+    day = int(match.group(2))
+    year = datetime.now().year
+    d = date(year, month, day)
+    if d < datetime.now().date():
+        d = date(year + 1, month, day)
+    return d
+
+
+def to_celsius(value: float, unit: str | None) -> float:
+    if unit is None:
+        return value
+    u = unit.upper()
+    if u == "K":
+        return value - 273.15
+    if u == "F":
+        return (value - 32) * 5.0 / 9.0
+    return value
+
+
+@st.cache_data(show_spinner=False, ttl=600)
+def windy_point_forecast(lat: float, lon: float, model: str, key: str):
+    payload = {
+        "lat": lat,
+        "lon": lon,
+        "model": model,
+        "parameters": ["temp"],
+        "key": key,
+    }
+    resp = requests.post(WINDY_API_URL, json=payload, timeout=20)
+    if not resp.ok:
+        return {"error": resp.text}
+    return resp.json()
+
+
+def peak_temp_for_date(data, target_date: date, tz_str: str | None) -> float | None:
+    if not data or "ts" not in data:
+        return None
+    ts_list = data.get("ts", [])
+    temps = data.get("temp-surface") or data.get("temp") or []
+    if not ts_list or not temps:
+        return None
+    units = (data.get("units") or {}).get("temp-surface")
+
+    tzinfo = None
+    if tz_str:
+        try:
+            tzinfo = ZoneInfo(tz_str)
+        except Exception:
+            tzinfo = None
+
+    max_temp = None
+    for ts, t in zip(ts_list, temps):
+        try:
+            ts_val = float(ts)
+            if ts_val > 10_000_000_000:
+                ts_val = ts_val / 1000.0
+            dt_utc = datetime.fromtimestamp(ts_val, tz=timezone.utc)
+            dt_local = dt_utc.astimezone(tzinfo) if tzinfo else dt_utc
+            if dt_local.date() != target_date:
+                continue
+            temp_c = to_celsius(float(t), units)
+            if max_temp is None or temp_c > max_temp:
+                max_temp = temp_c
+        except (TypeError, ValueError):
+            continue
+    return max_temp
+
+
 APP_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = APP_DIR / "assets"
+TZF = TimezoneFinder()
 
 
 def image_link_html(path: Path, url: str, height_px: int = 48) -> str:
@@ -322,6 +498,12 @@ I18N = {
         "refresh_sec": "Интервал (сек)",
         "horizon": "Горизонт исполнения (мин)",
         "prob_est": "Оценка P(исп.)",
+        "weather_title": "Прогноз температуры (пик)",
+        "weather_date": "Дата события",
+        "weather_update": "Обновить прогноз",
+        "weather_models": "Модели для запроса",
+        "weather_key_missing": "Нужен WINDY_API_KEY в Streamlit Secrets.",
+        "weather_other": "Другие модели",
     },
     "en": {
         "title": "Polymarket bet calculator",
@@ -375,6 +557,12 @@ I18N = {
         "refresh_sec": "Interval (sec)",
         "horizon": "Fill horizon (min)",
         "prob_est": "Est. P(fill)",
+        "weather_title": "Peak temperature forecast",
+        "weather_date": "Event date",
+        "weather_update": "Refresh forecast",
+        "weather_models": "Models to query",
+        "weather_key_missing": "WINDY_API_KEY is missing in Streamlit Secrets.",
+        "weather_other": "Other models",
     },
 }
 
@@ -454,6 +642,68 @@ if event and markets:
     st.subheader(event.get("title") or "Event")
     st.write(event.get("description") or "")
     st.caption(f"{t['markets_found']} {len(markets)}")
+
+    st.markdown(f"**{t['weather_title']}**")
+    event_date = parse_event_date(event.get("title") or "")
+    target_date = st.date_input(t["weather_date"], value=event_date or datetime.now().date())
+
+    windy_key = st.secrets.get("WINDY_API_KEY", "")
+    if not windy_key:
+        st.warning(t["weather_key_missing"])
+    else:
+        locations = resolve_locations()
+        query_models = st.multiselect(
+            t["weather_models"],
+            PRIMARY_MODELS + SECONDARY_MODELS,
+            default=["gfs"],
+        )
+
+        if "weather_cache" not in st.session_state:
+            st.session_state["weather_cache"] = {}
+
+        if st.button(t["weather_update"]):
+            results = []
+            for loc in locations:
+                row = {
+                    "Location": f"{loc['name']} ({loc['code']})",
+                }
+                for model in PRIMARY_MODELS:
+                    if model not in query_models:
+                        row[model.upper()] = "—"
+                        continue
+                    data = windy_point_forecast(loc["lat"], loc["lon"], model, windy_key)
+                    if isinstance(data, dict) and data.get("error"):
+                        row[model.upper()] = "н/д"
+                        continue
+                    temp = peak_temp_for_date(data, target_date, loc.get("tz"))
+                    row[model.upper()] = f"{temp:.1f}°C" if temp is not None else "н/д"
+                results.append(row)
+
+            st.session_state["weather_cache"]["primary"] = results
+
+            other_results = []
+            for loc in locations:
+                row = {
+                    "Location": f"{loc['name']} ({loc['code']})",
+                }
+                for model in SECONDARY_MODELS:
+                    if model not in query_models:
+                        row[model] = "—"
+                        continue
+                    data = windy_point_forecast(loc["lat"], loc["lon"], model, windy_key)
+                    if isinstance(data, dict) and data.get("error"):
+                        row[model] = "н/д"
+                        continue
+                    temp = peak_temp_for_date(data, target_date, loc.get("tz"))
+                    row[model] = f"{temp:.1f}°C" if temp is not None else "н/д"
+                other_results.append(row)
+            st.session_state["weather_cache"]["secondary"] = other_results
+
+        if st.session_state["weather_cache"].get("primary"):
+            st.dataframe(st.session_state["weather_cache"]["primary"], use_container_width=True)
+        if st.session_state["weather_cache"].get("secondary"):
+            with st.expander(t["weather_other"], expanded=False):
+                st.dataframe(st.session_state["weather_cache"]["secondary"], use_container_width=True)
 
     market_labels = [m["question"] for m in markets]
     default_selected = market_labels[: int(count_outcomes)]
@@ -637,5 +887,11 @@ if event and markets:
 
 else:
     st.info(t["info_start"])
+
+
+
+
+
+
 
 
