@@ -973,7 +973,7 @@ if event and markets:
                 st.session_state["weather_cache"]["primary"] = results
 
         else:
-            st.caption(f"{t['weather_models_label']}: GFS, ECMWF, ICON, METEOBLUE")
+            st.caption(f"{t['weather_models_label']}: GFS, ECMWF, ICON")
             if st.button(t["weather_update"]):
                 results = []
                 for loc in locations:
@@ -982,7 +982,6 @@ if event and markets:
                         "GFS": "н/д",
                         "ECMWF": "н/д",
                         "ICON": "н/д",
-                        "METEOBLUE": "н/д",
                     }
                     for label, model_key in [("GFS", "gfs"), ("ECMWF", "ecmwf"), ("ICON", "icon")]:
                         endpoint = OM_ENDPOINTS.get(model_key)
