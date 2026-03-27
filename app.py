@@ -3,11 +3,15 @@ import json
 from pathlib import Path
 from urllib.parse import urlparse
 
+import math
+import time
+
 import requests
 import streamlit as st
 
 GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_API = "https://clob.polymarket.com"
+DATA_API = "https://data-api.polymarket.com"
 
 
 def _parse_json_list(value):
@@ -58,7 +62,8 @@ def build_markets(event):
         items.append(
             {
                 "question": m.get("question") or m.get("title") or "Unknown",
-                "market_id": m.get("id") or m.get("conditionId") or "",
+                "market_id": m.get("id") or "",
+                "condition_id": m.get("conditionId") or "",
                 "token_id": token_id,
                 "outcomes": outcomes,
                 "clob_token_ids": clob_ids,
@@ -79,6 +84,26 @@ def fetch_orderbooks(token_ids):
         for book in data:
             books[book.get("asset_id")] = book
     return books
+
+
+def fetch_trades(condition_id: str, limit: int = 200):
+    if not condition_id:
+        return []
+    try:
+        resp = requests.get(
+            f"{DATA_API}/trades",
+            params={"market": condition_id, "limit": limit},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict) and "data" in data:
+            return data.get("data") or []
+        return []
+    except Exception:
+        return []
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -149,6 +174,92 @@ def suggest_price_from_book(book, mode: str) -> float | None:
     return max(min(price, 0.999), 0.001)
 
 
+def pick_price_with_target(
+    book,
+    trades,
+    token_id: str,
+    target_prob: float,
+    horizon_min: float,
+    mode: str,
+) -> float | None:
+    asks_sorted = _sorted_book(book.get("asks"), reverse=False)
+    bids_sorted = _sorted_book(book.get("bids"), reverse=True)
+    if not asks_sorted:
+        return None
+
+    best_ask = float(asks_sorted[0]["price"])
+    best_bid = float(bids_sorted[0]["price"]) if bids_sorted else max(best_ask - 0.01, 0.01)
+    mid = (best_ask + best_bid) / 2
+
+    candidates = [best_ask, mid]
+    candidates.extend([float(b.get("price")) for b in bids_sorted[:5] if b.get("price") is not None])
+    candidates = sorted(set([max(min(p, 0.999), 0.001) for p in candidates]), reverse=False)
+
+    if not trades:
+        return suggest_price_from_book(book, mode)
+
+    # Choose the lowest price that still meets target probability.
+    best = None
+    for p in candidates:
+        p_est = estimate_fill_probability(book, trades, token_id, p, horizon_min)
+        if p_est >= target_prob:
+            best = p
+            break
+    if best is None:
+        best = best_ask
+    return max(min(best, 0.999), 0.001)
+
+
+def estimate_fill_probability(book, trades, token_id: str, price: float, horizon_min: float) -> float:
+    asks_sorted = _sorted_book(book.get("asks"), reverse=False)
+    bids_sorted = _sorted_book(book.get("bids"), reverse=True)
+    if not asks_sorted:
+        return 0.0
+
+    best_ask = float(asks_sorted[0]["price"])
+    best_bid = float(bids_sorted[0]["price"]) if bids_sorted else max(best_ask - 0.01, 0.01)
+    if price >= best_ask:
+        return 1.0
+    if price <= 0:
+        return 0.0
+
+    # Queue ahead on bid side (conservative).
+    queue = 0.0
+    for b in bids_sorted:
+        try:
+            p = float(b.get("price"))
+            if p >= price:
+                queue += float(b.get("size", 0))
+        except (TypeError, ValueError):
+            continue
+
+    # Estimate flow from recent trades for this asset.
+    asset_trades = [t for t in trades if str(t.get("asset")) == str(token_id)]
+    if not asset_trades:
+        return 0.0
+
+    now = time.time()
+    ts = [float(t.get("timestamp", now)) for t in asset_trades]
+    window_sec = max(now - min(ts), 60.0)
+    total_size = 0.0
+    for t in asset_trades:
+        try:
+            total_size += float(t.get("size", 0))
+        except (TypeError, ValueError):
+            continue
+    flow_per_min = total_size / (window_sec / 60.0) if window_sec > 0 else 0.0
+    if flow_per_min <= 0:
+        return 0.0
+
+    # Expected time to fill (minutes).
+    t_fill = (queue + 1.0) / flow_per_min
+    if t_fill <= 0:
+        return 0.0
+
+    # Poisson-style fill probability within horizon.
+    return 1.0 - math.exp(-horizon_min / t_fill)
+
+
 LANGS = {
     "Русский": "ru",
     "English": "en",
@@ -201,6 +312,10 @@ I18N = {
         "mode_normal": "Normal 50%",
         "mode_risk": "Risk 35%",
         "mode_hint": "Режим подбирает цены по спреду и объёмам (эвристика).",
+        "auto_refresh": "Автообновление",
+        "refresh_sec": "Интервал (сек)",
+        "horizon": "Горизонт исполнения (мин)",
+        "prob_est": "Оценка P(исп.)",
     },
     "en": {
         "title": "Polymarket bet calculator",
@@ -248,6 +363,10 @@ I18N = {
         "mode_normal": "Normal 50%",
         "mode_risk": "Risk 35%",
         "mode_hint": "Mode suggests prices using spread and depth (heuristic).",
+        "auto_refresh": "Auto refresh",
+        "refresh_sec": "Interval (sec)",
+        "horizon": "Fill horizon (min)",
+        "prob_est": "Est. P(fill)",
     },
 }
 
@@ -278,8 +397,22 @@ with st.sidebar:
     lang = LANGS[lang_label]
     t = I18N[lang]
 
+    auto_refresh = st.checkbox(t["auto_refresh"], value=False)
+    refresh_sec = st.number_input(t["refresh_sec"], min_value=5, max_value=120, value=15, step=5)
+    horizon_min = st.number_input(t["horizon"], min_value=1, max_value=120, value=15, step=1)
+
 st.title(t["title"])
 st.caption(t["caption"])
+
+if auto_refresh:
+    if hasattr(st, "autorefresh"):
+        st.autorefresh(interval=int(refresh_sec * 1000), key="autorefresh")
+    else:
+        if "last_refresh" not in st.session_state:
+            st.session_state["last_refresh"] = time.time()
+        if time.time() - st.session_state["last_refresh"] >= refresh_sec:
+            st.session_state["last_refresh"] = time.time()
+            st.experimental_rerun()
 
 with st.sidebar:
     st.header(t["inputs"])
@@ -323,14 +456,23 @@ if event and markets:
         if st.button(t["refresh"]):
             st.session_state.pop("orderbooks", None)
 
-        if "orderbooks" not in st.session_state:
+        if auto_refresh or "orderbooks" not in st.session_state:
             try:
                 st.session_state["orderbooks"] = fetch_orderbooks([m["token_id"] for m in selected])
             except Exception as exc:
                 st.error(f"{t['orderbooks_failed']} {exc}")
                 st.session_state["orderbooks"] = {}
 
+        if "trades" not in st.session_state:
+            st.session_state["trades"] = {}
+        for m in selected:
+            if not m["condition_id"]:
+                continue
+            if auto_refresh or m["condition_id"] not in st.session_state["trades"]:
+                st.session_state["trades"][m["condition_id"]] = fetch_trades(m["condition_id"], limit=200)
+
         orderbooks = st.session_state.get("orderbooks", {})
+        trades_cache = st.session_state.get("trades", {})
 
         with st.expander(t["orderbooks_title"], expanded=False):
             tabs = st.tabs([m["question"] for m in selected])
@@ -390,7 +532,10 @@ if event and markets:
         if mode_cols[0].button(t["mode_safe"]):
             for m in selected:
                 book = orderbooks.get(m["token_id"], {})
-                price = suggest_price_from_book(book, "safe")
+                trades = trades_cache.get(m["condition_id"], [])
+                price = pick_price_with_target(
+                    book, trades, m["token_id"], 0.75, float(horizon_min), "safe"
+                )
                 if price is None:
                     continue
                 st.session_state[f"price_{m['token_id']}"] = round(price * 100, 2)
@@ -398,7 +543,10 @@ if event and markets:
         if mode_cols[1].button(t["mode_normal"]):
             for m in selected:
                 book = orderbooks.get(m["token_id"], {})
-                price = suggest_price_from_book(book, "normal")
+                trades = trades_cache.get(m["condition_id"], [])
+                price = pick_price_with_target(
+                    book, trades, m["token_id"], 0.50, float(horizon_min), "normal"
+                )
                 if price is None:
                     continue
                 st.session_state[f"price_{m['token_id']}"] = round(price * 100, 2)
@@ -406,7 +554,10 @@ if event and markets:
         if mode_cols[2].button(t["mode_risk"]):
             for m in selected:
                 book = orderbooks.get(m["token_id"], {})
-                price = suggest_price_from_book(book, "risk")
+                trades = trades_cache.get(m["condition_id"], [])
+                price = pick_price_with_target(
+                    book, trades, m["token_id"], 0.35, float(horizon_min), "risk"
+                )
                 if price is None:
                     continue
                 st.session_state[f"price_{m['token_id']}"] = round(price * 100, 2)
@@ -436,6 +587,15 @@ if event and markets:
                 key=state_key,
             )
             price_inputs.append((m, float(price_cents) / 100.0))
+            trades = trades_cache.get(m["condition_id"], [])
+            p_est = estimate_fill_probability(
+                book,
+                trades,
+                m["token_id"],
+                float(price_cents) / 100.0,
+                float(horizon_min),
+            )
+            st.caption(f"{t['prob_est']}: {p_est:.0%}")
 
         total_price = sum(p for _, p in price_inputs)
         if total_price <= 0:
