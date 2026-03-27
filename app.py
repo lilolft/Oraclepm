@@ -559,20 +559,27 @@ if event and markets:
             except (TypeError, ValueError):
                 default_price = 50.0
             state_key = f"price_{m['token_id']}"
-            if state_key in st.session_state:
-                default_price = float(st.session_state[state_key])
             if default_price < 1.0:
                 default_price = 1.0
             if default_price > 99.9:
                 default_price = 99.9
-            price_cents = st.number_input(
-                f"{m['question']} {t['price_label']}",
-                min_value=1.0,
-                max_value=99.9,
-                value=default_price,
-                step=0.1,
-                key=state_key,
-            )
+            if state_key in st.session_state:
+                price_cents = st.number_input(
+                    f"{m['question']} {t['price_label']}",
+                    min_value=1.0,
+                    max_value=99.9,
+                    step=0.1,
+                    key=state_key,
+                )
+            else:
+                price_cents = st.number_input(
+                    f"{m['question']} {t['price_label']}",
+                    min_value=1.0,
+                    max_value=99.9,
+                    value=default_price,
+                    step=0.1,
+                    key=state_key,
+                )
             price_inputs.append((m, float(price_cents) / 100.0))
             trades = trades_cache.get(m["condition_id"], [])
             p_est = estimate_fill_probability(
