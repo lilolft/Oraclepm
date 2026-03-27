@@ -260,6 +260,10 @@ def estimate_fill_probability(book, trades, token_id: str, price: float, horizon
     return 1.0 - math.exp(-horizon_min / t_fill)
 
 
+def _mark_input_change():
+    st.session_state["last_input_time"] = time.time()
+
+
 LANGS = {
     "Русский": "ru",
     "English": "en",
@@ -406,13 +410,15 @@ st.caption(t["caption"])
 
 if auto_refresh:
     if hasattr(st, "autorefresh"):
-        st.autorefresh(interval=int(refresh_sec * 1000), key="autorefresh")
+        if time.time() - st.session_state.get("last_input_time", 0) > 3:
+            st.autorefresh(interval=int(refresh_sec * 1000), key="autorefresh")
     else:
         if "last_refresh" not in st.session_state:
             st.session_state["last_refresh"] = time.time()
         if time.time() - st.session_state["last_refresh"] >= refresh_sec:
             st.session_state["last_refresh"] = time.time()
-            st.rerun()
+            if time.time() - st.session_state.get("last_input_time", 0) > 3:
+                st.rerun()
 
 with st.sidebar:
     st.header(t["inputs"])
@@ -570,6 +576,7 @@ if event and markets:
                     max_value=99.9,
                     step=0.1,
                     key=state_key,
+                    on_change=_mark_input_change,
                 )
             else:
                 price_cents = st.number_input(
@@ -579,6 +586,7 @@ if event and markets:
                     value=default_price,
                     step=0.1,
                     key=state_key,
+                    on_change=_mark_input_change,
                 )
             price_inputs.append((m, float(price_cents) / 100.0))
             trades = trades_cache.get(m["condition_id"], [])
