@@ -895,7 +895,7 @@ if event and markets:
             query_models = st.multiselect(
                 t["weather_models"],
                 SUPPORTED_MODELS,
-                default=SUPPORTED_MODELS,
+                default=["gfs", "iconEu"],
             )
 
             if st.button(t["weather_test"]):
