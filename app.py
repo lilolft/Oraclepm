@@ -412,7 +412,7 @@ if auto_refresh:
             st.session_state["last_refresh"] = time.time()
         if time.time() - st.session_state["last_refresh"] >= refresh_sec:
             st.session_state["last_refresh"] = time.time()
-            st.experimental_rerun()
+            st.rerun()
 
 with st.sidebar:
     st.header(t["inputs"])
