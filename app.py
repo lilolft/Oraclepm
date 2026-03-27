@@ -530,38 +530,25 @@ if event and markets:
         st.caption(t["mode_hint"])
         mode_cols = st.columns(3)
         if mode_cols[0].button(t["mode_safe"]):
-            for m in selected:
-                book = orderbooks.get(m["token_id"], {})
-                trades = trades_cache.get(m["condition_id"], [])
-                price = pick_price_with_target(
-                    book, trades, m["token_id"], 0.75, float(horizon_min), "safe"
-                )
-                if price is None:
-                    continue
-                st.session_state[f"price_{m['token_id']}"] = round(price * 100, 2)
-            st.rerun()
+            st.session_state["mode_apply"] = "safe"
         if mode_cols[1].button(t["mode_normal"]):
-            for m in selected:
-                book = orderbooks.get(m["token_id"], {})
-                trades = trades_cache.get(m["condition_id"], [])
-                price = pick_price_with_target(
-                    book, trades, m["token_id"], 0.50, float(horizon_min), "normal"
-                )
-                if price is None:
-                    continue
-                st.session_state[f"price_{m['token_id']}"] = round(price * 100, 2)
-            st.rerun()
+            st.session_state["mode_apply"] = "normal"
         if mode_cols[2].button(t["mode_risk"]):
+            st.session_state["mode_apply"] = "risk"
+
+        mode_apply = st.session_state.get("mode_apply")
+        if mode_apply:
+            target = {"safe": 0.75, "normal": 0.50, "risk": 0.35}.get(mode_apply, 0.50)
             for m in selected:
                 book = orderbooks.get(m["token_id"], {})
                 trades = trades_cache.get(m["condition_id"], [])
                 price = pick_price_with_target(
-                    book, trades, m["token_id"], 0.35, float(horizon_min), "risk"
+                    book, trades, m["token_id"], target, float(horizon_min), mode_apply
                 )
                 if price is None:
                     continue
                 st.session_state[f"price_{m['token_id']}"] = round(price * 100, 2)
-            st.rerun()
+            st.session_state.pop("mode_apply", None)
 
         price_inputs = []
         for m in selected:
