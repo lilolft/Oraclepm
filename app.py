@@ -18,15 +18,24 @@ GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_API = "https://clob.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
 WINDY_API_URL = "https://api.windy.com/api/point-forecast/v2"
+OPEN_METEO_BASE = "https://api.open-meteo.com/v1"
 
-SUPPORTED_MODELS = ["arome", "iconEu", "gfs", "namConus", "namHawaii", "namAlaska"]
+WINDY_MODELS = ["gfs", "iconEu"]
+OM_MODELS = ["gfs", "ecmwf", "icon", "meteoblue"]
+OM_ENDPOINTS = {
+    "gfs": f"{OPEN_METEO_BASE}/gfs",
+    "ecmwf": f"{OPEN_METEO_BASE}/ecmwf",
+    "icon": f"{OPEN_METEO_BASE}/dwd-icon",
+    # meteoblue is not available via Open-Meteo endpoints
+    "meteoblue": None,
+}
 PRIMARY_DISPLAY = [
     ("GFS", "gfs"),
     ("ECMWF", None),
     ("ICON", "iconEu"),
     ("METEOBLUE", None),
 ]
-SECONDARY_MODELS = [m for m in SUPPORTED_MODELS if m not in {"gfs", "iconEu"}]
+SECONDARY_MODELS = []
 
 AIRPORT_LIST = [
     ("Wellington", "NZWN"),
@@ -264,6 +273,35 @@ def test_models(lat: float, lon: float, key: str, models: list[str]) -> dict[str
         except Exception:
             results[model] = {"ok": False, "error": "exception"}
     return results
+
+
+@st.cache_data(show_spinner=False, ttl=600)
+def open_meteo_fetch(endpoint: str, lat: float, lon: float, tz_str: str | None, target_date: date):
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": "temperature_2m",
+        "start_date": target_date.isoformat(),
+        "end_date": target_date.isoformat(),
+        "timezone": tz_str or "auto",
+    }
+    resp = requests.get(endpoint, params=params, timeout=20)
+    if not resp.ok:
+        return {"error": resp.text, "status": resp.status_code}
+    return resp.json()
+
+
+def open_meteo_peak_temp(data) -> float | None:
+    if not data or "hourly" not in data:
+        return None
+    hourly = data.get("hourly") or {}
+    temps = hourly.get("temperature_2m") or []
+    if not temps:
+        return None
+    try:
+        return max(float(t) for t in temps)
+    except Exception:
+        return None
 
 
 def peak_temp_for_date(data, target_date: date, tz_str: str | None) -> float | None:
@@ -520,15 +558,17 @@ I18N = {
         "weather_title": "Прогноз температуры (пик)",
         "weather_date": "Дата события",
         "weather_update": "Обновить прогноз",
-        "weather_models": "Модели для запроса",
         "weather_key_missing": "Нужен WINDY_API_KEY в Streamlit Secrets.",
-        "weather_other": "Другие модели",
         "weather_test": "Проверить модели",
         "weather_supported": "Доступные модели",
         "weather_unavailable": "Недоступные модели",
         "weather_errors": "Ошибки моделей",
         "weather_select": "Выберите города",
         "weather_select_warn": "Нужно выбрать хотя бы один город.",
+        "weather_source": "Источник",
+        "weather_source_windy": "Windy (WF)",
+        "weather_source_om": "Open-Meteo (OM)",
+        "weather_models_label": "Модели",
     },
     "en": {
         "title": "Polymarket bet calculator",
@@ -585,15 +625,17 @@ I18N = {
         "weather_title": "Peak temperature forecast",
         "weather_date": "Event date",
         "weather_update": "Refresh forecast",
-        "weather_models": "Models to query",
         "weather_key_missing": "WINDY_API_KEY is missing in Streamlit Secrets.",
-        "weather_other": "Other models",
         "weather_test": "Test models",
         "weather_supported": "Available models",
         "weather_unavailable": "Unavailable models",
         "weather_errors": "Model errors",
         "weather_select": "Select cities",
         "weather_select_warn": "Select at least one city.",
+        "weather_source": "Source",
+        "weather_source_windy": "Windy (WF)",
+        "weather_source_om": "Open-Meteo (OM)",
+        "weather_models_label": "Models",
     },
 }
 
@@ -862,34 +904,41 @@ if event and markets:
         event_date = parse_event_date(event.get("title") or "")
         target_date = st.date_input(t["weather_date"], value=event_date or datetime.now().date())
 
-        windy_key = st.secrets.get("WINDY_API_KEY", "")
-        if not windy_key:
-            st.warning(t["weather_key_missing"])
-        else:
-            locations = resolve_locations()
-            city_labels = [f"{loc['name']} ({loc['code']})" for loc in locations]
-            selected_labels = st.multiselect(
-                t["weather_select"],
-                city_labels,
-                default=city_labels[:1] if city_labels else [],
-            )
-            locations = [loc for loc in locations if f"{loc['name']} ({loc['code']})" in selected_labels]
+        source = st.radio(
+            t["weather_source"],
+            [t["weather_source_windy"], t["weather_source_om"]],
+            horizontal=True,
+        )
 
-            if not locations:
-                st.warning(t["weather_select_warn"])
+        locations = resolve_locations()
+        city_labels = [f"{loc['name']} ({loc['code']})" for loc in locations]
+        selected_labels = st.multiselect(
+            t["weather_select"],
+            city_labels,
+            default=city_labels[:1] if city_labels else [],
+        )
+        locations = [loc for loc in locations if f"{loc['name']} ({loc['code']})" in selected_labels]
+
+        if not locations:
+            st.warning(t["weather_select_warn"])
+            st.stop()
+
+        if "weather_cache" not in st.session_state:
+            st.session_state["weather_cache"] = {}
+
+        if source == t["weather_source_windy"]:
+            st.caption(f"{t['weather_models_label']}: GFS, ICON-EU")
+            windy_key = st.secrets.get("WINDY_API_KEY", "")
+            if not windy_key:
+                st.warning(t["weather_key_missing"])
                 st.stop()
+
             if "model_test" not in st.session_state:
                 st.session_state["model_test"] = {}
 
-            query_models = st.multiselect(
-                t["weather_models"],
-                SUPPORTED_MODELS,
-                default=["gfs", "iconEu"],
-            )
-
             if st.button(t["weather_test"]):
                 sample = locations[0]
-                st.session_state["model_test"] = test_models(sample["lat"], sample["lon"], windy_key, SUPPORTED_MODELS)
+                st.session_state["model_test"] = test_models(sample["lat"], sample["lon"], windy_key, WINDY_MODELS)
 
             if st.session_state["model_test"]:
                 available = [m for m, v in st.session_state["model_test"].items() if v.get("ok")]
@@ -901,25 +950,21 @@ if event and markets:
                     with st.expander(t["weather_errors"], expanded=False):
                         st.write(errors)
 
-            if "weather_cache" not in st.session_state:
-                st.session_state["weather_cache"] = {}
-
             if st.button(t["weather_update"]):
                 results = []
                 for loc in locations:
                     row = {
                         "Location": f"{loc['name']} ({loc['code']})",
+                        "GFS": "н/д",
+                        "ICON": "н/д",
                     }
                     for label, model in PRIMARY_DISPLAY:
                         if model is None:
-                            row[label] = "н/д"
                             continue
-                        if model not in query_models:
-                            row[label] = "—"
+                        if model not in WINDY_MODELS:
                             continue
                         data = windy_point_forecast(loc["lat"], loc["lon"], model, windy_key)
                         if isinstance(data, dict) and data.get("error"):
-                            row[label] = "н/д"
                             continue
                         temp = peak_temp_for_date(data, target_date, loc.get("tz"))
                         row[label] = f"{temp:.1f}°C" if temp is not None else "н/д"
@@ -927,29 +972,33 @@ if event and markets:
 
                 st.session_state["weather_cache"]["primary"] = results
 
-                other_results = []
+        else:
+            st.caption(f"{t['weather_models_label']}: GFS, ECMWF, ICON, METEOBLUE")
+            if st.button(t["weather_update"]):
+                results = []
                 for loc in locations:
                     row = {
                         "Location": f"{loc['name']} ({loc['code']})",
+                        "GFS": "н/д",
+                        "ECMWF": "н/д",
+                        "ICON": "н/д",
+                        "METEOBLUE": "н/д",
                     }
-                    for model in SECONDARY_MODELS:
-                        if model not in query_models:
-                            row[model] = "—"
+                    for label, model_key in [("GFS", "gfs"), ("ECMWF", "ecmwf"), ("ICON", "icon")]:
+                        endpoint = OM_ENDPOINTS.get(model_key)
+                        if not endpoint:
                             continue
-                        data = windy_point_forecast(loc["lat"], loc["lon"], model, windy_key)
+                        data = open_meteo_fetch(endpoint, loc["lat"], loc["lon"], loc.get("tz"), target_date)
                         if isinstance(data, dict) and data.get("error"):
-                            row[model] = "н/д"
                             continue
-                        temp = peak_temp_for_date(data, target_date, loc.get("tz"))
-                        row[model] = f"{temp:.1f}°C" if temp is not None else "н/д"
-                    other_results.append(row)
-                st.session_state["weather_cache"]["secondary"] = other_results
+                        temp = open_meteo_peak_temp(data)
+                        row[label] = f"{temp:.1f}°C" if temp is not None else "н/д"
+                    results.append(row)
 
-            if st.session_state["weather_cache"].get("primary"):
-                st.dataframe(st.session_state["weather_cache"]["primary"], use_container_width=True)
-            if st.session_state["weather_cache"].get("secondary"):
-                with st.expander(t["weather_other"], expanded=False):
-                    st.dataframe(st.session_state["weather_cache"]["secondary"], use_container_width=True)
+                st.session_state["weather_cache"]["primary"] = results
+
+        if st.session_state["weather_cache"].get("primary"):
+            st.dataframe(st.session_state["weather_cache"]["primary"], use_container_width=True)
 
 else:
     st.info(t["info_start"])
