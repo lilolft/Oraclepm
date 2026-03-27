@@ -280,7 +280,7 @@ def open_meteo_fetch(endpoint: str, lat: float, lon: float, tz_str: str | None, 
     params = {
         "latitude": lat,
         "longitude": lon,
-        "hourly": "temperature_2m",
+        "daily": "temperature_2m_max",
         "start_date": target_date.isoformat(),
         "end_date": target_date.isoformat(),
         "timezone": tz_str or "auto",
@@ -292,14 +292,14 @@ def open_meteo_fetch(endpoint: str, lat: float, lon: float, tz_str: str | None, 
 
 
 def open_meteo_peak_temp(data) -> float | None:
-    if not data or "hourly" not in data:
+    if not data or "daily" not in data:
         return None
-    hourly = data.get("hourly") or {}
-    temps = hourly.get("temperature_2m") or []
+    daily = data.get("daily") or {}
+    temps = daily.get("temperature_2m_max") or []
     if not temps:
         return None
     try:
-        return max(float(t) for t in temps)
+        return float(temps[0])
     except Exception:
         return None
 
@@ -906,7 +906,7 @@ if event and markets:
         if "weather_cache" not in st.session_state:
             st.session_state["weather_cache"] = {}
 
-        st.caption(f"{t['weather_models_label']}: WF(GFS, ICON-EU) + OM(GFS, ECMWF, ICON)")
+        st.caption(f"{t['weather_models_label']}: WF(GFS, ICON-EU) + OM(GFS, ECMWF, ICON) — пик за локальные сутки")
 
         windy_key = st.secrets.get("WINDY_API_KEY", "")
         if not windy_key:
