@@ -666,271 +666,275 @@ event = st.session_state.get("event")
 markets = st.session_state.get("markets", [])
 
 if event and markets:
-    st.subheader(event.get("title") or "Event")
-    st.write(event.get("description") or "")
-    st.caption(f"{t['markets_found']} {len(markets)}")
+    tabs_main = st.tabs(["Калькулятор", "Погода"] if lang == "ru" else ["Calculator", "Weather"])
 
-    st.markdown(f"**{t['weather_title']}**")
-    event_date = parse_event_date(event.get("title") or "")
-    target_date = st.date_input(t["weather_date"], value=event_date or datetime.now().date())
+    with tabs_main[0]:
+        st.subheader(event.get("title") or "Event")
+        st.write(event.get("description") or "")
+        st.caption(f"{t['markets_found']} {len(markets)}")
 
-    windy_key = st.secrets.get("WINDY_API_KEY", "")
-    if not windy_key:
-        st.warning(t["weather_key_missing"])
-    else:
-        locations = resolve_locations()
-        if "model_test" not in st.session_state:
-            st.session_state["model_test"] = {}
+        market_labels = [m["question"] for m in markets]
+        default_selected = market_labels[: int(count_outcomes)]
+        selected_labels = st.multiselect(t["select_outcomes"], market_labels, default=default_selected)
 
-        query_models = st.multiselect(
-            t["weather_models"],
-            SUPPORTED_MODELS,
-            default=SUPPORTED_MODELS,
-        )
-
-        if st.button(t["weather_test"]):
-            sample = locations[0]
-            st.session_state["model_test"] = test_models(sample["lat"], sample["lon"], windy_key, SUPPORTED_MODELS)
-
-        if st.session_state["model_test"]:
-            available = [m for m, v in st.session_state["model_test"].items() if v.get("ok")]
-            unavailable = [m for m, v in st.session_state["model_test"].items() if not v.get("ok")]
-            st.caption(f"{t['weather_supported']}: {', '.join(available) if available else '—'}")
-            st.caption(f"{t['weather_unavailable']}: {', '.join(unavailable) if unavailable else '—'}")
-            errors = {m: v.get("error") for m, v in st.session_state["model_test"].items() if v.get("error")}
-            if errors:
-                with st.expander(t["weather_errors"], expanded=False):
-                    st.write(errors)
-
-        if "weather_cache" not in st.session_state:
-            st.session_state["weather_cache"] = {}
-
-        if st.button(t["weather_update"]):
-            results = []
-            for loc in locations:
-                row = {
-                    "Location": f"{loc['name']} ({loc['code']})",
-                }
-                for label, model in PRIMARY_DISPLAY:
-                    if model is None:
-                        row[label] = "н/д"
-                        continue
-                    if model not in query_models:
-                        row[label] = "—"
-                        continue
-                    data = windy_point_forecast(loc["lat"], loc["lon"], model, windy_key)
-                    if isinstance(data, dict) and data.get("error"):
-                        row[label] = "н/д"
-                        continue
-                    temp = peak_temp_for_date(data, target_date, loc.get("tz"))
-                    row[label] = f"{temp:.1f}°C" if temp is not None else "н/д"
-                results.append(row)
-
-            st.session_state["weather_cache"]["primary"] = results
-
-            other_results = []
-            for loc in locations:
-                row = {
-                    "Location": f"{loc['name']} ({loc['code']})",
-                }
-                for model in SECONDARY_MODELS:
-                    if model not in query_models:
-                        row[model] = "—"
-                        continue
-                    data = windy_point_forecast(loc["lat"], loc["lon"], model, windy_key)
-                    if isinstance(data, dict) and data.get("error"):
-                        row[model] = "н/д"
-                        continue
-                    temp = peak_temp_for_date(data, target_date, loc.get("tz"))
-                    row[model] = f"{temp:.1f}°C" if temp is not None else "н/д"
-                other_results.append(row)
-            st.session_state["weather_cache"]["secondary"] = other_results
-
-        if st.session_state["weather_cache"].get("primary"):
-            st.dataframe(st.session_state["weather_cache"]["primary"], use_container_width=True)
-        if st.session_state["weather_cache"].get("secondary"):
-            with st.expander(t["weather_other"], expanded=False):
-                st.dataframe(st.session_state["weather_cache"]["secondary"], use_container_width=True)
-
-    market_labels = [m["question"] for m in markets]
-    default_selected = market_labels[: int(count_outcomes)]
-    selected_labels = st.multiselect(t["select_outcomes"], market_labels, default=default_selected)
-
-    selected = [m for m in markets if m["question"] in selected_labels]
-    if not selected:
-        st.warning(t["select_warning"])
-    else:
-        if st.button(t["refresh"]):
-            st.session_state.pop("orderbooks", None)
-
-        if auto_refresh or "orderbooks" not in st.session_state:
-            try:
-                st.session_state["orderbooks"] = fetch_orderbooks([m["token_id"] for m in selected])
-            except Exception as exc:
-                st.error(f"{t['orderbooks_failed']} {exc}")
-                st.session_state["orderbooks"] = {}
-
-        if "trades" not in st.session_state:
-            st.session_state["trades"] = {}
-        for m in selected:
-            if not m["condition_id"]:
-                continue
-            if auto_refresh or m["condition_id"] not in st.session_state["trades"]:
-                st.session_state["trades"][m["condition_id"]] = fetch_trades(m["condition_id"], limit=200)
-
-        orderbooks = st.session_state.get("orderbooks", {})
-        trades_cache = st.session_state.get("trades", {})
-
-        with st.expander(t["orderbooks_title"], expanded=False):
-            tabs = st.tabs([m["question"] for m in selected])
-            for tab, m in zip(tabs, selected):
-                with tab:
-                    book = orderbooks.get(m["token_id"], {})
-                    asks = book.get("asks") or []
-                    bids = book.get("bids") or []
-
-                    asks_sorted = _sorted_book(asks, reverse=False)
-                    bids_sorted = _sorted_book(bids, reverse=True)
-
-                    best_bid = bids_sorted[0]["price"] if bids_sorted else None
-                    best_ask = asks_sorted[0]["price"] if asks_sorted else None
-                    spread = None
-                    if best_bid is not None and best_ask is not None:
-                        try:
-                            spread = round((float(best_ask) - float(best_bid)) * 100, 2)
-                        except (TypeError, ValueError):
-                            spread = None
-
-                    if spread is not None:
-                        st.caption(f"{t['spread']}: {spread}¢")
-                    else:
-                        st.caption(f"{t['spread']}: —")
-
-                    col_bids, col_asks = st.columns(2)
-
-                    ask_rows = []
-                    for a in asks_sorted[:5]:
-                        try:
-                            price = round(float(a.get("price")) * 100, 2)
-                        except (TypeError, ValueError):
-                            price = a.get("price")
-                        ask_rows.append({"Side": "ASK", t["price_cents"]: price, t["size_label"]: a.get("size")})
-
-                    bid_rows = []
-                    for b in bids_sorted[:5]:
-                        try:
-                            price = round(float(b.get("price")) * 100, 2)
-                        except (TypeError, ValueError):
-                            price = b.get("price")
-                        bid_rows.append({"Side": "BID", t["price_cents"]: price, t["size_label"]: b.get("size")})
-
-                    with col_bids:
-                        st.dataframe(bid_rows, use_container_width=True, hide_index=True)
-                    with col_asks:
-                        st.dataframe(ask_rows, use_container_width=True, hide_index=True)
-
-                    with st.expander(t["token_expander"]):
-                        st.code(m["token_id"])
-
-        st.subheader(t["set_prices"])
-        st.markdown(f"**{t['mode_title']}**")
-        price_mode = st.radio(
-            " ",
-            [t["mode_auto"], t["mode_manual"]],
-            index=0,
-            horizontal=True,
-            label_visibility="collapsed",
-        )
-        if price_mode == t["mode_auto"]:
-            st.caption(t["mode_hint"])
-            mode_cols = st.columns(3)
-            if mode_cols[0].button(t["mode_safe"]):
-                st.session_state["mode_apply"] = "safe"
-            if mode_cols[1].button(t["mode_normal"]):
-                st.session_state["mode_apply"] = "normal"
-            if mode_cols[2].button(t["mode_risk"]):
-                st.session_state["mode_apply"] = "risk"
-
-            mode_apply = st.session_state.get("mode_apply")
-            if mode_apply:
-                target = {"safe": 0.75, "normal": 0.50, "risk": 0.35}.get(mode_apply, 0.50)
-                for m in selected:
-                    book = orderbooks.get(m["token_id"], {})
-                    trades = trades_cache.get(m["condition_id"], [])
-                    price = pick_price_with_target(
-                        book, trades, m["token_id"], target, float(horizon_min), mode_apply
-                    )
-                    if price is None:
-                        continue
-                    st.session_state[f"price_{m['token_id']}"] = round(price * 100, 2)
-                st.session_state.pop("mode_apply", None)
-                _mark_input_change()
-
-        price_inputs = []
-        for m in selected:
-            book = orderbooks.get(m["token_id"], {})
-            default_price = None
-            try:
-                default_price = float((book.get("asks") or [{}])[0].get("price")) * 100
-            except (TypeError, ValueError):
-                default_price = 50.0
-            state_key = f"price_{m['token_id']}"
-            if default_price < 1.0:
-                default_price = 1.0
-            if default_price > 99.9:
-                default_price = 99.9
-            if state_key in st.session_state:
-                price_cents = st.number_input(
-                    f"{m['question']} {t['price_label']}",
-                    min_value=1.0,
-                    max_value=99.9,
-                    step=0.1,
-                    key=state_key,
-                    on_change=_mark_input_change,
-                )
-            else:
-                price_cents = st.number_input(
-                    f"{m['question']} {t['price_label']}",
-                    min_value=1.0,
-                    max_value=99.9,
-                    value=default_price,
-                    step=0.1,
-                    key=state_key,
-                    on_change=_mark_input_change,
-                )
-            price_inputs.append((m, float(price_cents) / 100.0))
-            trades = trades_cache.get(m["condition_id"], [])
-            p_est = estimate_fill_probability(
-                book,
-                trades,
-                m["token_id"],
-                float(price_cents) / 100.0,
-                float(horizon_min),
-            )
-            st.caption(f"{t['prob_est']}: {p_est:.0%}")
-
-        total_price = sum(p for _, p in price_inputs)
-        if total_price <= 0:
-            st.error(t["total_price_err"])
+        selected = [m for m in markets if m["question"] in selected_labels]
+        if not selected:
+            st.warning(t["select_warning"])
         else:
-            shares = budget / total_price
-            profit = shares - budget
+            if st.button(t["refresh"]):
+                st.session_state.pop("orderbooks", None)
 
-            alloc_rows = []
-            for m, price in price_inputs:
-                cost = shares * price
-                alloc_rows.append(
-                    {
-                        t["alloc_outcome"]: m["question"],
-                        t["alloc_price"]: round(price * 100, 2),
-                        t["alloc_shares"]: round(shares, 4),
-                        t["alloc_cost"]: round(cost, 4),
-                    }
+            if auto_refresh or "orderbooks" not in st.session_state:
+                try:
+                    st.session_state["orderbooks"] = fetch_orderbooks([m["token_id"] for m in selected])
+                except Exception as exc:
+                    st.error(f"{t['orderbooks_failed']} {exc}")
+                    st.session_state["orderbooks"] = {}
+
+            if "trades" not in st.session_state:
+                st.session_state["trades"] = {}
+            for m in selected:
+                if not m["condition_id"]:
+                    continue
+                if auto_refresh or m["condition_id"] not in st.session_state["trades"]:
+                    st.session_state["trades"][m["condition_id"]] = fetch_trades(m["condition_id"], limit=200)
+
+            orderbooks = st.session_state.get("orderbooks", {})
+            trades_cache = st.session_state.get("trades", {})
+
+            with st.expander(t["orderbooks_title"], expanded=False):
+                tabs = st.tabs([m["question"] for m in selected])
+                for tab, m in zip(tabs, selected):
+                    with tab:
+                        book = orderbooks.get(m["token_id"], {})
+                        asks = book.get("asks") or []
+                        bids = book.get("bids") or []
+
+                        asks_sorted = _sorted_book(asks, reverse=False)
+                        bids_sorted = _sorted_book(bids, reverse=True)
+
+                        best_bid = bids_sorted[0]["price"] if bids_sorted else None
+                        best_ask = asks_sorted[0]["price"] if asks_sorted else None
+                        spread = None
+                        if best_bid is not None and best_ask is not None:
+                            try:
+                                spread = round((float(best_ask) - float(best_bid)) * 100, 2)
+                            except (TypeError, ValueError):
+                                spread = None
+
+                        if spread is not None:
+                            st.caption(f"{t['spread']}: {spread}¢")
+                        else:
+                            st.caption(f"{t['spread']}: —")
+
+                        col_bids, col_asks = st.columns(2)
+
+                        ask_rows = []
+                        for a in asks_sorted[:5]:
+                            try:
+                                price = round(float(a.get("price")) * 100, 2)
+                            except (TypeError, ValueError):
+                                price = a.get("price")
+                            ask_rows.append({"Side": "ASK", t["price_cents"]: price, t["size_label"]: a.get("size")})
+
+                        bid_rows = []
+                        for b in bids_sorted[:5]:
+                            try:
+                                price = round(float(b.get("price")) * 100, 2)
+                            except (TypeError, ValueError):
+                                price = b.get("price")
+                            bid_rows.append({"Side": "BID", t["price_cents"]: price, t["size_label"]: b.get("size")})
+
+                        with col_bids:
+                            st.dataframe(bid_rows, use_container_width=True, hide_index=True)
+                        with col_asks:
+                            st.dataframe(ask_rows, use_container_width=True, hide_index=True)
+
+                        with st.expander(t["token_expander"]):
+                            st.code(m["token_id"])
+
+            st.subheader(t["set_prices"])
+            st.markdown(f"**{t['mode_title']}**")
+            price_mode = st.radio(
+                " ",
+                [t["mode_auto"], t["mode_manual"]],
+                index=0,
+                horizontal=True,
+                label_visibility="collapsed",
+            )
+            if price_mode == t["mode_auto"]:
+                st.caption(t["mode_hint"])
+                mode_cols = st.columns(3)
+                if mode_cols[0].button(t["mode_safe"]):
+                    st.session_state["mode_apply"] = "safe"
+                if mode_cols[1].button(t["mode_normal"]):
+                    st.session_state["mode_apply"] = "normal"
+                if mode_cols[2].button(t["mode_risk"]):
+                    st.session_state["mode_apply"] = "risk"
+
+                mode_apply = st.session_state.get("mode_apply")
+                if mode_apply:
+                    target = {"safe": 0.75, "normal": 0.50, "risk": 0.35}.get(mode_apply, 0.50)
+                    for m in selected:
+                        book = orderbooks.get(m["token_id"], {})
+                        trades = trades_cache.get(m["condition_id"], [])
+                        price = pick_price_with_target(
+                            book, trades, m["token_id"], target, float(horizon_min), mode_apply
+                        )
+                        if price is None:
+                            continue
+                        st.session_state[f"price_{m['token_id']}"] = round(price * 100, 2)
+                    st.session_state.pop("mode_apply", None)
+                    _mark_input_change()
+
+            price_inputs = []
+            for m in selected:
+                book = orderbooks.get(m["token_id"], {})
+                default_price = None
+                try:
+                    default_price = float((book.get("asks") or [{}])[0].get("price")) * 100
+                except (TypeError, ValueError):
+                    default_price = 50.0
+                state_key = f"price_{m['token_id']}"
+                if default_price < 1.0:
+                    default_price = 1.0
+                if default_price > 99.9:
+                    default_price = 99.9
+                if state_key in st.session_state:
+                    price_cents = st.number_input(
+                        f"{m['question']} {t['price_label']}",
+                        min_value=1.0,
+                        max_value=99.9,
+                        step=0.1,
+                        key=state_key,
+                        on_change=_mark_input_change,
+                    )
+                else:
+                    price_cents = st.number_input(
+                        f"{m['question']} {t['price_label']}",
+                        min_value=1.0,
+                        max_value=99.9,
+                        value=default_price,
+                        step=0.1,
+                        key=state_key,
+                        on_change=_mark_input_change,
+                    )
+                price_inputs.append((m, float(price_cents) / 100.0))
+                trades = trades_cache.get(m["condition_id"], [])
+                p_est = estimate_fill_probability(
+                    book,
+                    trades,
+                    m["token_id"],
+                    float(price_cents) / 100.0,
+                    float(horizon_min),
                 )
-            with st.expander(t["allocation_title"], expanded=True):
-                st.dataframe(alloc_rows, use_container_width=True)
-                st.info(f"{t['equal_payout']} {shares:.4f} shares")
-                st.info(f"{t['profit']} {profit:.4f} USD")
+                st.caption(f"{t['prob_est']}: {p_est:.0%}")
+
+            total_price = sum(p for _, p in price_inputs)
+            if total_price <= 0:
+                st.error(t["total_price_err"])
+            else:
+                shares = budget / total_price
+                profit = shares - budget
+
+                alloc_rows = []
+                for m, price in price_inputs:
+                    cost = shares * price
+                    alloc_rows.append(
+                        {
+                            t["alloc_outcome"]: m["question"],
+                            t["alloc_price"]: round(price * 100, 2),
+                            t["alloc_shares"]: round(shares, 4),
+                            t["alloc_cost"]: round(cost, 4),
+                        }
+                    )
+                with st.expander(t["allocation_title"], expanded=True):
+                    st.dataframe(alloc_rows, use_container_width=True)
+                    st.info(f"{t['equal_payout']} {shares:.4f} shares")
+                    st.info(f"{t['profit']} {profit:.4f} USD")
+
+    with tabs_main[1]:
+        st.subheader(t["weather_title"])
+        event_date = parse_event_date(event.get("title") or "")
+        target_date = st.date_input(t["weather_date"], value=event_date or datetime.now().date())
+
+        windy_key = st.secrets.get("WINDY_API_KEY", "")
+        if not windy_key:
+            st.warning(t["weather_key_missing"])
+        else:
+            locations = resolve_locations()
+            if "model_test" not in st.session_state:
+                st.session_state["model_test"] = {}
+
+            query_models = st.multiselect(
+                t["weather_models"],
+                SUPPORTED_MODELS,
+                default=SUPPORTED_MODELS,
+            )
+
+            if st.button(t["weather_test"]):
+                sample = locations[0]
+                st.session_state["model_test"] = test_models(sample["lat"], sample["lon"], windy_key, SUPPORTED_MODELS)
+
+            if st.session_state["model_test"]:
+                available = [m for m, v in st.session_state["model_test"].items() if v.get("ok")]
+                unavailable = [m for m, v in st.session_state["model_test"].items() if not v.get("ok")]
+                st.caption(f"{t['weather_supported']}: {', '.join(available) if available else '—'}")
+                st.caption(f"{t['weather_unavailable']}: {', '.join(unavailable) if unavailable else '—'}")
+                errors = {m: v.get("error") for m, v in st.session_state["model_test"].items() if v.get("error")}
+                if errors:
+                    with st.expander(t["weather_errors"], expanded=False):
+                        st.write(errors)
+
+            if "weather_cache" not in st.session_state:
+                st.session_state["weather_cache"] = {}
+
+            if st.button(t["weather_update"]):
+                results = []
+                for loc in locations:
+                    row = {
+                        "Location": f"{loc['name']} ({loc['code']})",
+                    }
+                    for label, model in PRIMARY_DISPLAY:
+                        if model is None:
+                            row[label] = "н/д"
+                            continue
+                        if model not in query_models:
+                            row[label] = "—"
+                            continue
+                        data = windy_point_forecast(loc["lat"], loc["lon"], model, windy_key)
+                        if isinstance(data, dict) and data.get("error"):
+                            row[label] = "н/д"
+                            continue
+                        temp = peak_temp_for_date(data, target_date, loc.get("tz"))
+                        row[label] = f"{temp:.1f}°C" if temp is not None else "н/д"
+                    results.append(row)
+
+                st.session_state["weather_cache"]["primary"] = results
+
+                other_results = []
+                for loc in locations:
+                    row = {
+                        "Location": f"{loc['name']} ({loc['code']})",
+                    }
+                    for model in SECONDARY_MODELS:
+                        if model not in query_models:
+                            row[model] = "—"
+                            continue
+                        data = windy_point_forecast(loc["lat"], loc["lon"], model, windy_key)
+                        if isinstance(data, dict) and data.get("error"):
+                            row[model] = "н/д"
+                            continue
+                        temp = peak_temp_for_date(data, target_date, loc.get("tz"))
+                        row[model] = f"{temp:.1f}°C" if temp is not None else "н/д"
+                    other_results.append(row)
+                st.session_state["weather_cache"]["secondary"] = other_results
+
+            if st.session_state["weather_cache"].get("primary"):
+                st.dataframe(st.session_state["weather_cache"]["primary"], use_container_width=True)
+            if st.session_state["weather_cache"].get("secondary"):
+                with st.expander(t["weather_other"], expanded=False):
+                    st.dataframe(st.session_state["weather_cache"]["secondary"], use_container_width=True)
 
 else:
     st.info(t["info_start"])
