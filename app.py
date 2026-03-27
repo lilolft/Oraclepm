@@ -111,7 +111,7 @@ LANGS = {
 
 I18N = {
     "ru": {
-        "title": "Калькулятор ставок Polymarket (локально)",
+        "title": "Калькулятор ставок Polymarket",
         "caption": "Шаг 1: загрузить событие. Шаг 2: выбрать исходы и задать цены.",
         "inputs": "Параметры",
         "event_input": "Ссылка на событие или slug",
@@ -153,7 +153,7 @@ I18N = {
         "token_expander": "Token ID",
     },
     "en": {
-        "title": "Polymarket bet calculator (local)",
+        "title": "Polymarket bet calculator",
         "caption": "Step 1: load an event. Step 2: pick outcomes and set limit prices.",
         "inputs": "Inputs",
         "event_input": "Event link or slug",
