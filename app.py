@@ -249,19 +249,19 @@ def windy_point_forecast(lat: float, lon: float, model: str, key: str):
     }
     resp = requests.post(WINDY_API_URL, json=payload, timeout=20)
     if not resp.ok:
-        return {"error": resp.text}
+        return {"error": resp.text, "status": resp.status_code}
     return resp.json()
 
 
-def test_models(lat: float, lon: float, key: str, models: list[str]) -> dict[str, bool]:
+def test_models(lat: float, lon: float, key: str, models: list[str]) -> dict[str, dict]:
     results = {}
     for model in models:
         try:
             data = windy_point_forecast(lat, lon, model, key)
             ok = isinstance(data, dict) and ("ts" in data) and ("temp-surface" in data or "temp" in data)
-            results[model] = ok
+            results[model] = {"ok": ok, "error": data.get("error") if isinstance(data, dict) else None}
         except Exception:
-            results[model] = False
+            results[model] = {"ok": False, "error": "exception"}
     return results
 
 
@@ -525,6 +525,7 @@ I18N = {
         "weather_test": "Проверить модели",
         "weather_supported": "Доступные модели",
         "weather_unavailable": "Недоступные модели",
+        "weather_errors": "Ошибки моделей",
     },
     "en": {
         "title": "Polymarket bet calculator",
@@ -587,6 +588,7 @@ I18N = {
         "weather_test": "Test models",
         "weather_supported": "Available models",
         "weather_unavailable": "Unavailable models",
+        "weather_errors": "Model errors",
     },
 }
 
@@ -690,10 +692,14 @@ if event and markets:
             st.session_state["model_test"] = test_models(sample["lat"], sample["lon"], windy_key, SUPPORTED_MODELS)
 
         if st.session_state["model_test"]:
-            available = [m for m, ok in st.session_state["model_test"].items() if ok]
-            unavailable = [m for m, ok in st.session_state["model_test"].items() if not ok]
+            available = [m for m, v in st.session_state["model_test"].items() if v.get("ok")]
+            unavailable = [m for m, v in st.session_state["model_test"].items() if not v.get("ok")]
             st.caption(f"{t['weather_supported']}: {', '.join(available) if available else '—'}")
             st.caption(f"{t['weather_unavailable']}: {', '.join(unavailable) if unavailable else '—'}")
+            errors = {m: v.get("error") for m, v in st.session_state["model_test"].items() if v.get("error")}
+            if errors:
+                with st.expander(t["weather_errors"], expanded=False):
+                    st.write(errors)
 
         if "weather_cache" not in st.session_state:
             st.session_state["weather_cache"] = {}
