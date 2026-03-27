@@ -81,11 +81,17 @@ def fetch_orderbooks(token_ids):
     return books
 
 
-def image_link_html(path: str, url: str, height_px: int = 48) -> str:
-    data = Path(path).read_bytes()
-    if path.lower().endswith(".svg"):
+APP_DIR = Path(__file__).resolve().parent
+ASSETS_DIR = APP_DIR / "assets"
+
+
+def image_link_html(path: Path, url: str, height_px: int = 48) -> str:
+    if not path.exists():
+        return f'<a href="{url}" target="_blank">{url}</a>'
+    data = path.read_bytes()
+    if path.name.lower().endswith(".svg"):
         mime = "image/svg+xml"
-    elif path.lower().endswith(".png"):
+    elif path.name.lower().endswith(".png"):
         mime = "image/png"
     else:
         mime = "image/jpeg"
@@ -197,7 +203,7 @@ with st.sidebar:
     with col_left:
         st.markdown(
             image_link_html(
-                "C:\\Users\\liLo\\Desktop\\polymarket\\assets\\polymarket-white.svg",
+                ASSETS_DIR / "polymarket-white.svg",
                 "https://polymarket.com/?r=ORACLEPM",
                 height_px=48,
             ),
@@ -206,7 +212,7 @@ with st.sidebar:
     with col_right:
         st.markdown(
             image_link_html(
-                "C:\\Users\\liLo\\Desktop\\polymarket\\assets\\proxyline.jpg",
+                ASSETS_DIR / "proxyline.jpg",
                 "https://proxyline.net?line=208153",
                 height_px=48,
             ),
