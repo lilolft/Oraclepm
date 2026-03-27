@@ -19,7 +19,7 @@ CLOB_API = "https://clob.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
 WINDY_API_URL = "https://api.windy.com/api/point-forecast/v2"
 
-SUPPORTED_MODELS = ["arome", "iconEu", "gfs", "gfsWave", "namConus", "namHawaii", "namAlaska", "cams"]
+SUPPORTED_MODELS = ["arome", "iconEu", "gfs", "namConus", "namHawaii", "namAlaska"]
 PRIMARY_DISPLAY = [
     ("GFS", "gfs"),
     ("ECMWF", None),
@@ -244,6 +244,7 @@ def windy_point_forecast(lat: float, lon: float, model: str, key: str):
         "lat": lat,
         "lon": lon,
         "model": model,
+        "levels": ["surface"],
         "parameters": ["temp"],
         "key": key,
     }
