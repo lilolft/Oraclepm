@@ -527,6 +527,9 @@ I18N = {
         "weather_supported": "Доступные модели",
         "weather_unavailable": "Недоступные модели",
         "weather_errors": "Ошибки моделей",
+        "weather_search": "Поиск города",
+        "weather_select": "Выберите города",
+        "weather_select_warn": "Нужно выбрать хотя бы один город.",
     },
     "en": {
         "title": "Polymarket bet calculator",
@@ -590,6 +593,9 @@ I18N = {
         "weather_supported": "Available models",
         "weather_unavailable": "Unavailable models",
         "weather_errors": "Model errors",
+        "weather_search": "City search",
+        "weather_select": "Select cities",
+        "weather_select_warn": "Select at least one city.",
     },
 }
 
@@ -863,6 +869,26 @@ if event and markets:
             st.warning(t["weather_key_missing"])
         else:
             locations = resolve_locations()
+            search_text = st.text_input(t["weather_search"], value="")
+            if search_text:
+                locations = [
+                    loc
+                    for loc in locations
+                    if search_text.lower() in loc["name"].lower()
+                    or search_text.lower() in (loc.get("code") or "").lower()
+                ]
+
+            city_labels = [f"{loc['name']} ({loc['code']})" for loc in locations]
+            selected_labels = st.multiselect(
+                t["weather_select"],
+                city_labels,
+                default=city_labels[:1] if city_labels else [],
+            )
+            locations = [loc for loc in locations if f"{loc['name']} ({loc['code']})" in selected_labels]
+
+            if not locations:
+                st.warning(t["weather_select_warn"])
+                st.stop()
             if "model_test" not in st.session_state:
                 st.session_state["model_test"] = {}
 
