@@ -559,15 +559,8 @@ I18N = {
         "weather_date": "Дата события",
         "weather_update": "Обновить прогноз",
         "weather_key_missing": "Нужен WINDY_API_KEY в Streamlit Secrets.",
-        "weather_test": "Проверить модели",
-        "weather_supported": "Доступные модели",
-        "weather_unavailable": "Недоступные модели",
-        "weather_errors": "Ошибки моделей",
         "weather_select": "Выберите города",
         "weather_select_warn": "Нужно выбрать хотя бы один город.",
-        "weather_source": "Источник",
-        "weather_source_windy": "Windy (WF)",
-        "weather_source_om": "Open-Meteo (OM)",
         "weather_models_label": "Модели",
     },
     "en": {
@@ -626,15 +619,8 @@ I18N = {
         "weather_date": "Event date",
         "weather_update": "Refresh forecast",
         "weather_key_missing": "WINDY_API_KEY is missing in Streamlit Secrets.",
-        "weather_test": "Test models",
-        "weather_supported": "Available models",
-        "weather_unavailable": "Unavailable models",
-        "weather_errors": "Model errors",
         "weather_select": "Select cities",
         "weather_select_warn": "Select at least one city.",
-        "weather_source": "Source",
-        "weather_source_windy": "Windy (WF)",
-        "weather_source_om": "Open-Meteo (OM)",
         "weather_models_label": "Models",
     },
 }
@@ -904,12 +890,6 @@ if event and markets:
         event_date = parse_event_date(event.get("title") or "")
         target_date = st.date_input(t["weather_date"], value=event_date or datetime.now().date())
 
-        source = st.radio(
-            t["weather_source"],
-            [t["weather_source_windy"], t["weather_source_om"]],
-            horizontal=True,
-        )
-
         locations = resolve_locations()
         city_labels = [f"{loc['name']} ({loc['code']})" for loc in locations]
         selected_labels = st.multiselect(
@@ -926,75 +906,45 @@ if event and markets:
         if "weather_cache" not in st.session_state:
             st.session_state["weather_cache"] = {}
 
-        if source == t["weather_source_windy"]:
-            st.caption(f"{t['weather_models_label']}: GFS, ICON-EU")
-            windy_key = st.secrets.get("WINDY_API_KEY", "")
-            if not windy_key:
-                st.warning(t["weather_key_missing"])
-                st.stop()
+        st.caption(f"{t['weather_models_label']}: WF(GFS, ICON-EU) + OM(GFS, ECMWF, ICON)")
 
-            if "model_test" not in st.session_state:
-                st.session_state["model_test"] = {}
+        windy_key = st.secrets.get("WINDY_API_KEY", "")
+        if not windy_key:
+            st.warning(t["weather_key_missing"])
 
-            if st.button(t["weather_test"]):
-                sample = locations[0]
-                st.session_state["model_test"] = test_models(sample["lat"], sample["lon"], windy_key, WINDY_MODELS)
+        if st.button(t["weather_update"]):
+            results = []
+            for loc in locations:
+                row = {
+                    "Location": f"{loc['name']} ({loc['code']})",
+                    "WF GFS": "н/д",
+                    "WF ICON": "н/д",
+                    "OM GFS": "н/д",
+                    "OM ECMWF": "н/д",
+                    "OM ICON": "н/д",
+                }
 
-            if st.session_state["model_test"]:
-                available = [m for m, v in st.session_state["model_test"].items() if v.get("ok")]
-                unavailable = [m for m, v in st.session_state["model_test"].items() if not v.get("ok")]
-                st.caption(f"{t['weather_supported']}: {', '.join(available) if available else '—'}")
-                st.caption(f"{t['weather_unavailable']}: {', '.join(unavailable) if unavailable else '—'}")
-                errors = {m: v.get("error") for m, v in st.session_state["model_test"].items() if v.get("error")}
-                if errors:
-                    with st.expander(t["weather_errors"], expanded=False):
-                        st.write(errors)
-
-            if st.button(t["weather_update"]):
-                results = []
-                for loc in locations:
-                    row = {
-                        "Location": f"{loc['name']} ({loc['code']})",
-                        "GFS": "н/д",
-                        "ICON": "н/д",
-                    }
-                    for label, model in PRIMARY_DISPLAY:
-                        if model is None:
-                            continue
-                        if model not in WINDY_MODELS:
-                            continue
+                if windy_key:
+                    for label, model in [("WF GFS", "gfs"), ("WF ICON", "iconEu")]:
                         data = windy_point_forecast(loc["lat"], loc["lon"], model, windy_key)
                         if isinstance(data, dict) and data.get("error"):
                             continue
                         temp = peak_temp_for_date(data, target_date, loc.get("tz"))
                         row[label] = f"{temp:.1f}°C" if temp is not None else "н/д"
-                    results.append(row)
 
-                st.session_state["weather_cache"]["primary"] = results
+                for label, model_key in [("OM GFS", "gfs"), ("OM ECMWF", "ecmwf"), ("OM ICON", "icon")]:
+                    endpoint = OM_ENDPOINTS.get(model_key)
+                    if not endpoint:
+                        continue
+                    data = open_meteo_fetch(endpoint, loc["lat"], loc["lon"], loc.get("tz"), target_date)
+                    if isinstance(data, dict) and data.get("error"):
+                        continue
+                    temp = open_meteo_peak_temp(data)
+                    row[label] = f"{temp:.1f}°C" if temp is not None else "н/д"
 
-        else:
-            st.caption(f"{t['weather_models_label']}: GFS, ECMWF, ICON")
-            if st.button(t["weather_update"]):
-                results = []
-                for loc in locations:
-                    row = {
-                        "Location": f"{loc['name']} ({loc['code']})",
-                        "GFS": "н/д",
-                        "ECMWF": "н/д",
-                        "ICON": "н/д",
-                    }
-                    for label, model_key in [("GFS", "gfs"), ("ECMWF", "ecmwf"), ("ICON", "icon")]:
-                        endpoint = OM_ENDPOINTS.get(model_key)
-                        if not endpoint:
-                            continue
-                        data = open_meteo_fetch(endpoint, loc["lat"], loc["lon"], loc.get("tz"), target_date)
-                        if isinstance(data, dict) and data.get("error"):
-                            continue
-                        temp = open_meteo_peak_temp(data)
-                        row[label] = f"{temp:.1f}°C" if temp is not None else "н/д"
-                    results.append(row)
+                results.append(row)
 
-                st.session_state["weather_cache"]["primary"] = results
+            st.session_state["weather_cache"]["primary"] = results
 
         if st.session_state["weather_cache"].get("primary"):
             st.dataframe(st.session_state["weather_cache"]["primary"], use_container_width=True)
