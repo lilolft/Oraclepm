@@ -312,6 +312,8 @@ I18N = {
         "size_label": "Размер",
         "token_expander": "Token ID",
         "mode_title": "Автоподбор цен",
+        "mode_manual": "Ручной",
+        "mode_auto": "Авто",
         "mode_safe": "Safe 75%",
         "mode_normal": "Normal 50%",
         "mode_risk": "Risk 35%",
@@ -363,6 +365,8 @@ I18N = {
         "size_label": "Size",
         "token_expander": "Token ID",
         "mode_title": "Auto price mode",
+        "mode_manual": "Manual",
+        "mode_auto": "Auto",
         "mode_safe": "Safe 75%",
         "mode_normal": "Normal 50%",
         "mode_risk": "Risk 35%",
@@ -533,28 +537,37 @@ if event and markets:
 
         st.subheader(t["set_prices"])
         st.markdown(f"**{t['mode_title']}**")
-        st.caption(t["mode_hint"])
-        mode_cols = st.columns(3)
-        if mode_cols[0].button(t["mode_safe"]):
-            st.session_state["mode_apply"] = "safe"
-        if mode_cols[1].button(t["mode_normal"]):
-            st.session_state["mode_apply"] = "normal"
-        if mode_cols[2].button(t["mode_risk"]):
-            st.session_state["mode_apply"] = "risk"
+        price_mode = st.radio(
+            " ",
+            [t["mode_auto"], t["mode_manual"]],
+            index=0,
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+        if price_mode == t["mode_auto"]:
+            st.caption(t["mode_hint"])
+            mode_cols = st.columns(3)
+            if mode_cols[0].button(t["mode_safe"]):
+                st.session_state["mode_apply"] = "safe"
+            if mode_cols[1].button(t["mode_normal"]):
+                st.session_state["mode_apply"] = "normal"
+            if mode_cols[2].button(t["mode_risk"]):
+                st.session_state["mode_apply"] = "risk"
 
-        mode_apply = st.session_state.get("mode_apply")
-        if mode_apply:
-            target = {"safe": 0.75, "normal": 0.50, "risk": 0.35}.get(mode_apply, 0.50)
-            for m in selected:
-                book = orderbooks.get(m["token_id"], {})
-                trades = trades_cache.get(m["condition_id"], [])
-                price = pick_price_with_target(
-                    book, trades, m["token_id"], target, float(horizon_min), mode_apply
-                )
-                if price is None:
-                    continue
-                st.session_state[f"price_{m['token_id']}"] = round(price * 100, 2)
-            st.session_state.pop("mode_apply", None)
+            mode_apply = st.session_state.get("mode_apply")
+            if mode_apply:
+                target = {"safe": 0.75, "normal": 0.50, "risk": 0.35}.get(mode_apply, 0.50)
+                for m in selected:
+                    book = orderbooks.get(m["token_id"], {})
+                    trades = trades_cache.get(m["condition_id"], [])
+                    price = pick_price_with_target(
+                        book, trades, m["token_id"], target, float(horizon_min), mode_apply
+                    )
+                    if price is None:
+                        continue
+                    st.session_state[f"price_{m['token_id']}"] = round(price * 100, 2)
+                st.session_state.pop("mode_apply", None)
+                _mark_input_change()
 
         price_inputs = []
         for m in selected:
