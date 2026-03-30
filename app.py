@@ -497,6 +497,40 @@ def _mark_input_change():
     st.session_state["last_input_time"] = time.time()
 
 
+def _is_temp_market(questions: list[str]) -> bool:
+    if not questions:
+        return False
+    hits = 0
+    for q in questions:
+        if "°" in q or re.search(r"\\b\\d+\\s*c\\b", q, flags=re.IGNORECASE):
+            hits += 1
+    return hits >= max(3, len(questions) // 2)
+
+
+def _parse_temp_range(question: str):
+    text = question.lower().replace(",", ".")
+    nums = re.findall(r"(-?\\d+(?:\\.\\d+)?)\\s*°\\s*c?|(-?\\d+(?:\\.\\d+)?)\\s*c\\b", text)
+    values = []
+    for a, b in nums:
+        if a:
+            values.append(float(a))
+        if b:
+            values.append(float(b))
+    if not values:
+        return (float("inf"), float("inf"))
+
+    is_below = "or below" in text or "or lower" in text
+    is_above = "or higher" in text or "or above" in text
+
+    if is_below:
+        return (-float("inf"), min(values))
+    if is_above:
+        return (max(values), float("inf"))
+
+    if len(values) >= 2:
+        return (min(values), max(values))
+    return (values[0], values[0])
+
 
 
 
@@ -713,6 +747,9 @@ if event and markets:
         st.write(event.get("description") or "")
         st.caption(f"{t['markets_found']} {len(markets)}")
 
+        questions = [m["question"] for m in markets]
+        if _is_temp_market(questions):
+            markets = sorted(markets, key=lambda m: _parse_temp_range(m["question"]))
         market_labels = [m["question"] for m in markets]
         default_selected = market_labels[: int(count_outcomes)]
         selected_labels = st.multiselect(t["select_outcomes"], market_labels, default=default_selected)
