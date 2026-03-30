@@ -499,11 +499,20 @@ def _mark_input_change():
 
 def _question_sort_key(question: str, idx: int):
     text = question.lower()
-    nums = re.findall(r"-?\\d+(?:\\.\\d+)?", question.replace(",", "."))
-    if not nums:
+    temp_nums = re.findall(r"(-?\\d+(?:\\.\\d+)?)\\s*°", question.replace(",", "."))
+    if not temp_nums:
+        temp_nums = re.findall(r"(-?\\d+(?:\\.\\d+)?)\\s*c", question.replace(",", "."))
+    if not temp_nums:
+        nums = re.findall(r"-?\\d+(?:\\.\\d+)?", question.replace(",", "."))
+        if not nums:
+            return (2, float("inf"), idx)
+        values = [float(n) for n in nums]
+        base = min(values)
+    else:
+        values = [float(n) for n in temp_nums]
+        base = min(values)
+    if base is None:
         return (2, float("inf"), idx)
-    values = [float(n) for n in nums]
-    base = min(values)
     is_or_higher = "or higher" in text or "+" in question
     group = 1 if is_or_higher else 0
     return (group, base, idx)
