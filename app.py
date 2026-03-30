@@ -678,6 +678,10 @@ with st.sidebar:
     count_outcomes = st.number_input(t["count_outcomes"], min_value=1, value=3, step=1)
     load_clicked = st.button(t["load"])
 
+    st.markdown("<div style='margin-top: 24px;'></div>", unsafe_allow_html=True)
+    st.markdown("**Donate**")
+    st.code("0xeF1Fb9beE4424faf1EE48B03aa11cbd3799f8B62")
+
 if load_clicked:
     slug = extract_slug(event_input)
     if not slug:
