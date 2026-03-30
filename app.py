@@ -497,39 +497,19 @@ def _mark_input_change():
     st.session_state["last_input_time"] = time.time()
 
 
-def _is_temp_market(questions: list[str]) -> bool:
-    if not questions:
-        return False
-    hits = 0
-    for q in questions:
-        if "°" in q or re.search(r"\\b\\d+\\s*c\\b", q, flags=re.IGNORECASE):
-            hits += 1
-    return hits >= max(3, len(questions) // 2)
+def _update_selection_order():
+    selected = st.session_state.get("selected_labels", [])
+    prev = st.session_state.get("selected_prev", [])
+    order = st.session_state.get("selected_order", [])
 
+    # Remove deselected
+    order = [x for x in order if x in selected]
+    # Append newly selected in the order they were added
+    newly = [x for x in selected if x not in prev]
+    order.extend(newly)
 
-def _parse_temp_range(question: str):
-    text = question.lower().replace(",", ".")
-    nums = re.findall(r"(-?\\d+(?:\\.\\d+)?)\\s*°\\s*c?|(-?\\d+(?:\\.\\d+)?)\\s*c\\b", text)
-    values = []
-    for a, b in nums:
-        if a:
-            values.append(float(a))
-        if b:
-            values.append(float(b))
-    if not values:
-        return (float("inf"), float("inf"))
-
-    is_below = "or below" in text or "or lower" in text
-    is_above = "or higher" in text or "or above" in text
-
-    if is_below:
-        return (-float("inf"), min(values))
-    if is_above:
-        return (max(values), float("inf"))
-
-    if len(values) >= 2:
-        return (min(values), max(values))
-    return (values[0], values[0])
+    st.session_state["selected_order"] = order
+    st.session_state["selected_prev"] = list(selected)
 
 
 
@@ -747,14 +727,19 @@ if event and markets:
         st.write(event.get("description") or "")
         st.caption(f"{t['markets_found']} {len(markets)}")
 
-        questions = [m["question"] for m in markets]
-        if _is_temp_market(questions):
-            markets = sorted(markets, key=lambda m: _parse_temp_range(m["question"]))
         market_labels = [m["question"] for m in markets]
-        default_selected = market_labels[: int(count_outcomes)]
-        selected_labels = st.multiselect(t["select_outcomes"], market_labels, default=default_selected)
+        selected_labels = st.multiselect(
+            t["select_outcomes"],
+            market_labels,
+            default=[],
+            key="selected_labels",
+            on_change=_update_selection_order,
+        )
 
-        selected = [m for m in markets if m["question"] in selected_labels]
+        label_to_market = {m["question"]: m for m in markets}
+        ordered = st.session_state.get("selected_order", selected_labels)
+        ordered = [x for x in ordered if x in selected_labels]
+        selected = [label_to_market[x] for x in ordered if x in label_to_market]
         if not selected:
             st.warning(t["select_warning"])
         else:
