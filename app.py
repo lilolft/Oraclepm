@@ -499,23 +499,27 @@ def _mark_input_change():
 
 def _question_sort_key(question: str, idx: int):
     text = question.lower()
-    temp_nums = re.findall(r"(-?\\d+(?:\\.\\d+)?)\\s*°", question.replace(",", "."))
-    if not temp_nums:
-        temp_nums = re.findall(r"(-?\\d+(?:\\.\\d+)?)\\s*c", question.replace(",", "."))
-    if not temp_nums:
-        nums = re.findall(r"-?\\d+(?:\\.\\d+)?", question.replace(",", "."))
-        if not nums:
-            return (2, float("inf"), idx)
+    normalized = question.replace(",", ".")
+    # Prefer explicit temperature patterns
+    for pattern in (r"(-?\\d+(?:\\.\\d+)?)\\s*°\\s*c?", r"(-?\\d+(?:\\.\\d+)?)\\s*c\\b"):
+        temp_nums = re.findall(pattern, normalized, flags=re.IGNORECASE)
+        if temp_nums:
+            values = [float(n) for n in temp_nums]
+            base = min(values)
+            return (0, base, idx)
+
+    # Fallback: remove obvious date patterns, then take smallest number
+    cleaned = re.sub(
+        r"(january|february|march|april|may|june|july|august|september|october|november|december)\\s+\\d{1,2}",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    nums = re.findall(r"-?\\d+(?:\\.\\d+)?", cleaned.replace(",", "."))
+    if nums:
         values = [float(n) for n in nums]
-        base = min(values)
-    else:
-        values = [float(n) for n in temp_nums]
-        base = min(values)
-    if base is None:
-        return (2, float("inf"), idx)
-    is_or_higher = "or higher" in text or "+" in question
-    group = 1 if is_or_higher else 0
-    return (group, base, idx)
+        return (0, min(values), idx)
+    return (1, float("inf"), idx)
 
 
 
