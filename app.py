@@ -888,16 +888,16 @@ if event and markets:
                 profit = shares - budget
 
                 alloc_rows = []
-            for m, price in price_inputs:
-                cost = shares * price
-                alloc_rows.append(
-                    {
-                        t["alloc_outcome"]: m["question"],
-                        t["alloc_price"]: round(price * 100, 2),
-                        t["alloc_shares"]: round(shares, 4),
-                        t["alloc_cost"]: round(cost, 4),
-                    }
-                )
+                for m, price in price_inputs:
+                    cost = shares * price
+                    alloc_rows.append(
+                        {
+                            t["alloc_outcome"]: m["question"],
+                            t["alloc_price"]: round(price * 100, 2),
+                            t["alloc_shares"]: round(shares, 4),
+                            t["alloc_cost"]: round(cost, 4),
+                        }
+                    )
                 with st.expander(t["allocation_title"], expanded=True):
                     st.dataframe(alloc_rows, use_container_width=True)
                     st.info(f"{t['equal_payout']} {shares:.4f} shares")
