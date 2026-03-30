@@ -497,6 +497,13 @@ def _mark_input_change():
     st.session_state["last_input_time"] = time.time()
 
 
+def _question_sort_key(question: str, idx: int):
+    match = re.search(r"-?\\d+(?:\\.\\d+)?", question.replace(",", "."))
+    if match:
+        return (0, float(match.group(0)), idx)
+    return (1, float("inf"), idx)
+
+
 LANGS = {
     "Русский": "ru",
     "English": "en",
@@ -709,6 +716,11 @@ if event and markets:
         st.write(event.get("description") or "")
         st.caption(f"{t['markets_found']} {len(markets)}")
 
+        sorted_markets = sorted(
+            list(enumerate(markets)),
+            key=lambda x: _question_sort_key(x[1]["question"], x[0]),
+        )
+        markets = [m for _, m in sorted_markets]
         market_labels = [m["question"] for m in markets]
         default_selected = market_labels[: int(count_outcomes)]
         selected_labels = st.multiselect(t["select_outcomes"], market_labels, default=default_selected)
