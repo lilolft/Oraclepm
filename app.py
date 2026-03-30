@@ -504,19 +504,6 @@ def _question_sort_key(question: str, idx: int):
     return (1, float("inf"), idx)
 
 
-def liquidity_at_price(book, limit_price: float) -> float:
-    asks_sorted = _sorted_book(book.get("asks"), reverse=False)
-    if not asks_sorted:
-        return 0.0
-    total = 0.0
-    for a in asks_sorted:
-        try:
-            p = float(a.get("price"))
-            if p <= limit_price:
-                total += float(a.get("size", 0))
-        except (TypeError, ValueError):
-            continue
-    return total
 
 
 LANGS = {
@@ -554,8 +541,6 @@ I18N = {
         "alloc_price": "Цена",
         "alloc_shares": "Shares",
         "alloc_cost": "Сумма ($)",
-        "alloc_liq": "Ликвидность (shares)",
-        "alloc_fill": "Заполнение (%)",
         "equal_payout": "Равная выплата при любом исходе:",
         "profit": "Прибыль на выигрышный исход (выплата - сумма):",
         "orders_title": "Лимитные ордера для выставления",
@@ -616,8 +601,6 @@ I18N = {
         "alloc_price": "Price",
         "alloc_shares": "Shares",
         "alloc_cost": "Cost ($)",
-        "alloc_liq": "Liquidity (shares)",
-        "alloc_fill": "Fill (%)",
         "equal_payout": "Equal payout if any outcome wins:",
         "profit": "Profit per winning outcome (payout - budget):",
         "orders_title": "Limit orders to place",
@@ -907,19 +890,12 @@ if event and markets:
                 alloc_rows = []
             for m, price in price_inputs:
                 cost = shares * price
-                book = orderbooks.get(m["token_id"], {})
-                liq = liquidity_at_price(book, price)
-                fill_pct = 0.0
-                if shares > 0:
-                    fill_pct = min(1.0, liq / shares)
                 alloc_rows.append(
                     {
                         t["alloc_outcome"]: m["question"],
                         t["alloc_price"]: round(price * 100, 2),
                         t["alloc_shares"]: round(shares, 4),
                         t["alloc_cost"]: round(cost, 4),
-                        t["alloc_liq"]: round(liq, 4),
-                        t["alloc_fill"]: f"{fill_pct:.0%}",
                     }
                 )
                 with st.expander(t["allocation_title"], expanded=True):
