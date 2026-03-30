@@ -497,29 +497,6 @@ def _mark_input_change():
     st.session_state["last_input_time"] = time.time()
 
 
-def _question_sort_key(question: str, idx: int):
-    text = question.lower()
-    normalized = question.replace(",", ".")
-    # Prefer explicit temperature patterns
-    for pattern in (r"(-?\\d+(?:\\.\\d+)?)\\s*°\\s*c?", r"(-?\\d+(?:\\.\\d+)?)\\s*c\\b"):
-        temp_nums = re.findall(pattern, normalized, flags=re.IGNORECASE)
-        if temp_nums:
-            values = [float(n) for n in temp_nums]
-            base = min(values)
-            return (0, base, idx)
-
-    # Fallback: remove obvious date patterns, then take smallest number
-    cleaned = re.sub(
-        r"(january|february|march|april|may|june|july|august|september|october|november|december)\\s+\\d{1,2}",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    )
-    nums = re.findall(r"-?\\d+(?:\\.\\d+)?", cleaned.replace(",", "."))
-    if nums:
-        values = [float(n) for n in nums]
-        return (0, min(values), idx)
-    return (1, float("inf"), idx)
 
 
 
@@ -736,11 +713,6 @@ if event and markets:
         st.write(event.get("description") or "")
         st.caption(f"{t['markets_found']} {len(markets)}")
 
-        sorted_markets = sorted(
-            list(enumerate(markets)),
-            key=lambda x: _question_sort_key(x[1]["question"], x[0]),
-        )
-        markets = [m for _, m in sorted_markets]
         market_labels = [m["question"] for m in markets]
         default_selected = market_labels[: int(count_outcomes)]
         selected_labels = st.multiselect(t["select_outcomes"], market_labels, default=default_selected)
